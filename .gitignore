@@ -1,0 +1,28 @@
+# Course metadata (IMPORTANT!)
+metadata.yml
+**/metadata.yml
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+.vs/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# NuGet Packages
+**/packages/*
+*.nuget.props
+*.nuget.targets
+
+# Logs
+*.log
