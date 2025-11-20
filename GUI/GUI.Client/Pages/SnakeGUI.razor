@@ -1,0 +1,349 @@
+﻿@code{// <copyright file="SnakeGUI.razor" company="UofU-CS3500">
+    // Copyright (c) 2024 UofU-CS3500. All rights reserved.
+    // </copyright>
+// <authors> Kellen Auth and Ben Homer </authors>
+//<Date> Last modified November 2024 </Date>
+}
+@page "/snake"
+@rendermode InteractiveServer
+@using Blazor.Extensions
+@using Blazor.Extensions.Canvas
+@using Blazor.Extensions.Canvas.Canvas2D
+@using System.Numerics
+@using System.Diagnostics
+@using System.Text.Json
+@using CS3500.Networking
+@using GUI.Client.Controllers
+@using GUI.Client.Models
+@inject IJSRuntime JsRuntime;
+
+<PageTitle> Snake </PageTitle>
+
+<div id="ConnectionInputs">
+    <div class="input-row">
+        <label for="url"> Server Address: </label>
+        <input id="url" disabled="@networkController!.connection!.IsConnected" type="text" @bind="ServerNameOrAddress" />
+        <label for="url"> Port: </label>
+        <input id="port" disabled="@networkController.connection.IsConnected" type="number" @bind="ServerPort" class="port" />
+        @if (networkController.connection.IsConnected)
+        {
+            <button class="btn btn-primary" @onclick="DisconnectFromServer">Disconnect</button>
+        }
+        else
+        {
+            <button class="btn btn-primary" @onclick="ConnectToServer">Connect</button>
+        }
+    </div>
+
+
+    @{
+        bool disconnected = !networkController.connection.IsConnected;
+        string grayedOut = disconnected ? "grayedOut" : string.Empty;
+    }
+
+    <div class="input-row">
+        <label for="message"> UserName </label>
+        <input id="message" disabled="@networkController.connection.IsConnected" type="text" maxlength="16" @bind="userName"/>
+    </div>
+
+</div>
+
+
+@code
+{
+    /// <summary>
+    /// Default server name
+    /// </summary>
+    private string ServerNameOrAddress = "localhost";
+
+    /// <summary>
+    /// Default server port
+    /// </summary>
+    private int ServerPort = 11000;
+
+    /// <summary>
+    /// The UserName a player inputs
+    /// </summary>
+    private string userName = "";
+
+
+    /// <summary>
+    /// NetworkController object that runs the network loop.
+    /// </summary>
+    private NetworkController? networkController = null;
+
+
+    /// <summary>
+    /// Disconnect the client from the server.
+    /// </summary>
+    private void DisconnectFromServer()
+    {
+        networkController!.Disconnect();
+    }
+
+    /// <summary>
+    /// Handler for the connect button
+    /// Attempt to connect to the server, then start an asynchronous loop
+    /// to recieve the data from the server
+    /// </summary>
+    private void ConnectToServer()
+    {
+        try
+        {
+
+            networkController!.connection = new();
+            new Thread(() => { networkController.Connect(ServerNameOrAddress, ServerPort, userName); }).Start();
+
+        }
+        catch
+        {
+
+        }
+
+    }
+
+
+    /// <summary>
+    ///   Create a default networkController object
+    /// </summary>
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        networkController = new NetworkController(new World());
+    }
+
+}
+
+
+<div id="snakeCanvas" style="position: fixed; width: 100%; height: 100%">
+    <BECanvas Width="1000" Height="1000" @ref="canvasReference"></BECanvas>
+</div>
+
+@code
+{
+    /// <summary>
+    /// Basic Canvas component
+    /// </summary>
+    private BECanvasComponent canvasReference = null!;
+    /// <summary>
+    /// Canvas context to draw on
+    /// </summary>
+    private Canvas2DContext context = null!;
+    /// <summary>
+    /// Java module to render on
+    /// </summary>
+    private IJSObjectReference jsModule = null!;
+    /// <summary>
+    /// List of colors to be used for player snakes
+    /// </summary>
+    private List<string> colors = new List<string>(["blue", "brown", "green", "purple", "indigo", "cyan", "teal", "lime", "orange"]);
+
+    /// <summary>
+    /// Initializes canvas components and starts the drawing game loop.
+    /// </summary>
+    /// <param name="firstRender"> The boolean representing on a first render </param>
+    protected override async Task OnAfterRenderAsync( bool firstRender )
+    {
+
+        // Draw the background:
+
+        if ( firstRender )
+        {
+            Debug.WriteLine("first render start");
+            jsModule = await JsRuntime.InvokeAsync<IJSObjectReference>( "import", "./Pages/SnakeGUI.razor.js" );
+            this.context = await this.canvasReference.CreateCanvas2DAsync();
+            await JsRuntime.InvokeAsync<object>( "initRenderJS", DotNetObjectReference.Create( this ) );
+            new Thread(() =>
+            { GameLoop(); }).Start();
+
+        }
+
+    }
+
+
+    /// <summary>
+    /// Renders the view once every 20 milliseconds (50 frames/second)
+    /// </summary>
+    private async void GameLoop()
+    {
+        while (true)
+        {
+            Thread.Sleep(20);
+            await DrawFrame();
+        }
+    }
+
+    /// <summary>
+    /// Draws one frame of the game
+    /// </summary>
+    private async Task DrawFrame()
+    {
+        if (networkController!.connection!.IsConnected)
+        {
+            await context.BeginBatchAsync();
+            //clear frame
+            if (networkController.worldSize != null)
+            {
+                await context.ClearRectAsync((double)(-networkController.worldSize / 2), (double)(-networkController.worldSize / 2), (double)networkController.worldSize, (double)networkController.worldSize);
+            }
+            //if network disconnected for any reason during this clear only the rectangle view
+            else
+            {
+                await context.ClearRectAsync(0, 0, 1000, 1000);
+            }
+
+            //clip the view so that objects drawn outside the canvas will not be shown
+            if (networkController.world.player != null)
+            {
+                await context.BeginPathAsync();
+                await context.RectAsync(0, 0, 1000, 1000);
+                await context.ClipAsync();
+
+                //Because we are modifying the transformation matrix, we need to save it so we can restore it at the end
+                await context.SaveAsync();
+
+
+                //Center on origin, move to center of view port
+                await context.TranslateAsync(1000 / 2, 1000 / 2);
+                await context.TranslateAsync(-networkController.world.player.body[0].X, -networkController.world.player.body[0].Y);
+            }
+
+
+            //create the background
+            await context.SetFillStyleAsync("lightblue");
+            if (networkController.worldSize != null)
+            {
+                await context.FillRectAsync((double)(-networkController.worldSize / 2), (double)(-networkController.worldSize / 2), (double)networkController.worldSize, (double)networkController.worldSize);
+
+            }
+            //if world size hasn't arrived yet create a normal rectangle background
+            else
+            {
+                await context.FillRectAsync(0, 0, 1000, 1000);
+            }
+
+            //draw the walls
+            lock (networkController.world.walls)
+            {
+                foreach (Walls wall in networkController.world.walls)
+                {
+                    context.SetStrokeStyleAsync("grey");
+                    context.SetLineWidthAsync(50);
+                    context.SetLineCapAsync(LineCap.Butt);
+                    context.BeginPathAsync();
+                    context.MoveToAsync(wall.p1.X, wall.p1.Y);
+                    context.LineToAsync(wall.p2.X, wall.p2.Y);
+                    context.StrokeAsync();
+                }
+            }
+
+            //draw the alive snakes
+            lock (networkController.world.snakes)
+            {
+                foreach (Snake snake in networkController.world.snakes.Values)
+                {
+                    context.SetStrokeStyleAsync(colors[snake.snake % 9]);
+                    context.SetLineWidthAsync(10);
+                    context.SetLineCapAsync(LineCap.Round);
+                    context.BeginPathAsync();
+                    Point2D tempPoint = snake.body[0];
+                    for (int i = 1; i < snake.body.Count; i++)
+                    {
+                        context.MoveToAsync(tempPoint.X, tempPoint.Y);
+                        context.LineToAsync(snake.body[i].X, snake.body[i].Y);
+                        context.StrokeAsync();
+                        tempPoint = snake.body[i];
+                    }
+                    //getting score on top of snakes head
+                    Point2D head = snake.body[snake.body.Count - 1]; 
+                    string scoreText = snake.name + ": " + snake.score.ToString(); 
+                    double textOffsetY = -20; 
+                    context.SetFillStyleAsync("black"); 
+                    context.SetFontAsync("16px Arial"); 
+                    context.FillTextAsync(scoreText, head.X, head.Y + textOffsetY);
+                }
+            }
+
+            //draw the dead snakes
+            lock (networkController.world.deadSnakes)
+            {
+                foreach (Snake snake in networkController.world.deadSnakes.Values)
+                {
+                    context.SetStrokeStyleAsync("red");
+                    context.SetLineWidthAsync(10);
+                    context.SetLineCapAsync(LineCap.Round);
+                    context.BeginPathAsync();
+                    Point2D tempPoint = snake.body[0];
+                    for (int i = 1; i < snake.body.Count; i++)
+                    {
+                        context.MoveToAsync(tempPoint.X, tempPoint.Y);
+                        context.LineToAsync(snake.body[i].X, snake.body[i].Y);
+                        context.StrokeAsync();
+                        tempPoint = snake.body[i];
+                    }
+                    //draw the players score and username on each of their heads
+                    Point2D head = snake.body[snake.body.Count - 1]; 
+                    string scoreText = snake.name + ": " + snake.score.ToString(); 
+                    double textOffsetY = -20; 
+                    context.SetFillStyleAsync("black"); 
+                    context.SetFontAsync("16px Arial"); 
+                    context.FillTextAsync(scoreText, head.X, head.Y + textOffsetY);
+                }
+            }
+
+            //draw the powerups
+            lock (networkController.world.powerups)
+            {
+                foreach (Powerups p in networkController.world.powerups.Values)
+                {
+                    // smaller yellow circle for powerups
+                    context.SetLineWidthAsync(5);
+                    context.SetStrokeStyleAsync($"rgb( 255, 255, 0 )");
+                    context.SetFillStyleAsync("yellow");
+                    context.BeginPathAsync();
+                    context.ArcAsync(p.loc.X, p.loc.Y, 3, 0, 2 * Math.PI);
+                    context.StrokeAsync();
+                }
+            }
+        }
+
+        await context.RestoreAsync();
+        await context.EndBatchAsync();
+        await InvokeAsync(() =>{StateHasChanged();});
+    }
+
+
+
+
+    /// <summary>
+    /// When the movement keys are pressed send it to the network controller.
+    /// </summary>
+    /// <param name="key"> the keystring that was pressed</param>
+    [JSInvokable]
+    public void HandleKeyPress( string key )
+    {
+        
+        if (!(networkController == null))
+        {
+            if (key.Equals("w"))
+            {
+                networkController.MoveUp();
+            }
+            else if (key.Equals("d"))
+            {
+                networkController.MoveRight();
+            }
+            else if (key.Equals("s"))
+            {
+                networkController.MoveDown();
+            }
+            else if (key.Equals("a"))
+            {
+                networkController.MoveLeft();
+            }
+        }
+        
+    }
+
+}
+
